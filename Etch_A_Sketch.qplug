@@ -1,7 +1,8 @@
+BuildVersion = "1.0.0.0"
+
 PluginInfo = {
-  Name = "Games~Etch A Sketch",
-  Version = "1.0.0",
-  BuildVersion = "1.0.0.0",
+  Name = "Games~Etch A Sketch v" .. BuildVersion,
+  Version = BuildVersion,
   Id = "a8710d8d-88b4-49ce-b673-fad9186f4342",
   Author = "Jens Claerebout",
   Description = "Two-knob drawing toy rendered as dynamic SVG",
