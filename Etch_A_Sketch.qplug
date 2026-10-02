@@ -1,0 +1,338 @@
+PluginInfo = {
+  Name = "Games~Etch A Sketch",
+  Version = "1.0.0",
+  BuildVersion = "1.0.0.0",
+  Id = "a8710d8d-88b4-49ce-b673-fad9186f4342",
+  Author = "Jens Claerebout",
+  Description = "Two-knob drawing toy rendered as dynamic SVG",
+  ShowDebug = false
+}
+
+function GetProperties()
+    local props = { }
+
+    return props
+end
+
+function GetColor(props)
+  return {205, 35, 45}
+end
+
+function GetPrettyName(props)
+  return "Etch A Sketch " .. PluginInfo.Version
+end
+
+function GetControls(props)
+  return {
+    {
+      Name = "Display",
+      ControlType = "Button",
+      ButtonType = "Toggle",
+      UserPin = false,
+      Count = 1
+    },
+    {
+      Name = "Horizontal",
+      ControlType = "Knob",
+      ControlUnit = "Percent",
+      Min = 0,
+      Max = 100,
+      DefaultValue = 50,
+      UserPin = true,
+      PinStyle = "Both",
+      Count = 1
+    },
+    {
+      Name = "Vertical",
+      ControlType = "Knob",
+      ControlUnit = "Percent",
+      Min = 0,
+      Max = 100,
+      DefaultValue = 50,
+      UserPin = true,
+      PinStyle = "Both",
+      Count = 1
+    },
+    {
+      Name = "PenUp",
+      ControlType = "Button",
+      ButtonType = "Toggle",
+      UserPin = true,
+      PinStyle = "Both",
+      Count = 1
+    },
+    {
+      Name = "Clear",
+      ControlType = "Button",
+      ButtonType = "Trigger",
+      UserPin = true,
+      PinStyle = "Input",
+      Count = 1
+    },
+    {
+      Name = "LineWidth",
+      ControlType = "Knob",
+      ControlUnit = "Integer",
+      Min = 1,
+      Max = 8,
+      DefaultValue = 3,
+      UserPin = true,
+      PinStyle = "Both",
+      Count = 1
+    },
+    {
+      Name = "SegmentCount",
+      ControlType = "Text",
+      UserPin = true,
+      PinStyle = "Output",
+      Count = 1
+    }
+  }
+end
+
+function GetControlLayout(props)
+  local layout = {}
+  local graphics = {}
+
+  table.insert(graphics, {
+    Type = "GroupBox",
+    Text = "Etch A Sketch",
+    Position = {5, 5},
+    Size = {650, 565},
+    Fill = {232, 235, 239},
+    StrokeWidth = 1,
+    CornerRadius = 8
+  })
+
+  layout.Display = {
+    PrettyName = "Drawing~Display",
+    Style = "Button",
+    ButtonStyle = "Toggle",
+    Position = {25, 32},
+    Size = {610, 407},
+    Margin = 0,
+    Padding = 0,
+    Color = {205, 35, 45},
+    UnlinkOffColor = true,
+    OffColor = {205, 35, 45}
+  }
+
+  table.insert(graphics, {Type="Text", Text="Horizontal", Position={20,452}, Size={90,18}, FontSize=11})
+  layout.Horizontal = {
+    PrettyName = "Knobs~Horizontal",
+    Style = "Knob",
+    Position = {37, 472},
+    Size = {62, 62},
+    ShowTextbox = true
+  }
+
+  table.insert(graphics, {Type="Text", Text="Vertical", Position={115,452}, Size={90,18}, FontSize=11})
+  layout.Vertical = {
+    PrettyName = "Knobs~Vertical",
+    Style = "Knob",
+    Position = {132, 472},
+    Size = {62, 62},
+    ShowTextbox = true
+  }
+
+  layout.PenUp = {
+    PrettyName = "Drawing~Pen Up",
+    Legend = "Pen Up",
+    Style = "Button",
+    ButtonStyle = "Toggle",
+    Position = {235, 478},
+    Size = {95, 32},
+    Color = {232, 165, 35}
+  }
+
+  layout.Clear = {
+    PrettyName = "Drawing~Clear",
+    Legend = "Clear",
+    Style = "Button",
+    ButtonStyle = "Trigger",
+    Position = {340, 478},
+    Size = {95, 32},
+    Color = {205, 35, 45}
+  }
+
+  table.insert(graphics, {Type="Text", Text="Line width", Position={450,452}, Size={80,18}, FontSize=11})
+  layout.LineWidth = {
+    PrettyName = "Drawing~Line Width",
+    Style = "Knob",
+    Position = {462, 472},
+    Size = {62, 62},
+    ShowTextbox = true
+  }
+
+  table.insert(graphics, {Type="Text", Text="Segments", Position={545,470}, Size={75,18}, FontSize=11})
+  layout.SegmentCount = {
+    PrettyName = "Status~Segment Count",
+    Style = "Text",
+    Position = {545, 492},
+    Size = {75, 24},
+    IsReadOnly = true
+  }
+
+  return layout, graphics
+end
+
+if Controls then
+  local rapidjson = require("rapidjson")
+  local EzSVG = require("EzSVG")
+
+  local SVG_WIDTH = 600
+  local SVG_HEIGHT = 400
+  local SCREEN_X = 58
+  local SCREEN_Y = 58
+  local SCREEN_WIDTH = 484
+  local SCREEN_HEIGHT = 270
+  local MAX_SEGMENTS = 1500
+
+  local segments = {}
+  local currentX = 50
+  local currentY = 50
+  local internalUpdate = false
+  local cachedArtwork
+
+  local function clamp(value, minimum, maximum)
+    return math.max(minimum, math.min(maximum, value))
+  end
+
+  local function screenPoint(xPercent, yPercent)
+    local x = SCREEN_X + (clamp(xPercent, 0, 100) / 100) * SCREEN_WIDTH
+    local y = SCREEN_Y + ((100 - clamp(yPercent, 0, 100)) / 100) * SCREEN_HEIGHT
+    return x, y
+  end
+
+  local function addCenteredText(document, value, x, y, size, color, weight)
+    document:add(EzSVG.Text(value, x, y, {
+      fill = color,
+      stroke = "none",
+      font_family = "Arial",
+      font_size = size,
+      font_weight = weight or "normal",
+      text_anchor = "middle"
+    }))
+  end
+
+  local function createDrawing()
+    -- Build the fixed artwork once; recorded segments are already SVG commands.
+    if cachedArtwork then
+      local width = math.floor(clamp(Controls.LineWidth.Value, 1, 8) + 0.5)
+      local cursorX, cursorY = screenPoint(currentX, currentY)
+      local drawing = string.format(
+        '<path fill="none" stroke="#303536" stroke-width="%d" stroke-linecap="round" d="%s"/>' ..
+        '<circle cx="%.3f" cy="%.3f" r="%.1f" fill="%s"/>',
+        width, table.concat(segments, " "), cursorX, cursorY, 3 + width / 2,
+        Controls.PenUp.Boolean and "#E3A62F" or "#303536"
+      )
+      return cachedArtwork .. drawing .. '</svg>'
+    end
+    local document = EzSVG.Document(SVG_WIDTH, SVG_HEIGHT)
+
+    document:add(EzSVG.Rect(2, 2, SVG_WIDTH - 4, SVG_HEIGHT - 4, 34, 34, {
+      fill = "#D32634",
+      stroke = "#961B25",
+      stroke_width = 4
+    }))
+
+    addCenteredText(document, "MAGIC DRAWING SCREEN", SVG_WIDTH / 2, 35, 20, "#F3D36A", "bold")
+
+    document:add(EzSVG.Rect(SCREEN_X - 8, SCREEN_Y - 8, SCREEN_WIDTH + 16, SCREEN_HEIGHT + 16, 16, 16, {
+      fill = "#AEB4B5",
+      stroke = "#F2D86D",
+      stroke_width = 5
+    }))
+    document:add(EzSVG.Rect(SCREEN_X, SCREEN_Y, SCREEN_WIDTH, SCREEN_HEIGHT, 8, 8, {
+      fill = "#D9DDDA",
+      stroke = "#6F7474",
+      stroke_width = 2
+    }))
+
+    document:add(EzSVG.Circle(67, 363, 28, {fill="#F7F4E8", stroke="#A9A79E", stroke_width=3}))
+    document:add(EzSVG.Circle(533, 363, 28, {fill="#F7F4E8", stroke="#A9A79E", stroke_width=3}))
+    addCenteredText(document, "H", 67, 368, 15, "#777777", "bold")
+    addCenteredText(document, "V", 533, 368, 15, "#777777", "bold")
+
+    cachedArtwork = document:toString():gsub('</svg>%s*$', '')
+    return createDrawing()
+  end
+
+  local function redraw()
+    Controls.SegmentCount.String = tostring(#segments)
+    Controls.Display.Legend = rapidjson.encode({
+      DrawChrome = false,
+      IconData = Crypto.Base64Encode(createDrawing())
+    })
+  end
+
+  local drawingDirty = false
+  -- Keep a global reference so Q-SYS cannot garbage-collect the timer.
+  DrawingRenderTimer = Timer.New()
+  DrawingRenderTimer.EventHandler = function()
+    if drawingDirty then
+      drawingDirty = false
+      redraw()
+    end
+  end
+  DrawingRenderTimer:Start(0.05)
+
+  local function requestRedraw()
+    drawingDirty = true
+  end
+
+  local function moveTo(newX, newY)
+    newX = clamp(newX, 0, 100)
+    newY = clamp(newY, 0, 100)
+
+    if newX == currentX and newY == currentY then
+      return
+    end
+
+    if not Controls.PenUp.Boolean then
+      local x1, y1 = screenPoint(currentX, currentY)
+      local x2, y2 = screenPoint(newX, newY)
+      -- Separate subpaths preserve pen-up gaps and round line caps.
+      table.insert(segments, string.format("M%.3f %.3f L%.3f %.3f", x1, y1, x2, y2))
+      if #segments > MAX_SEGMENTS then
+        table.remove(segments, 1)
+      end
+    end
+
+    currentX = newX
+    currentY = newY
+    requestRedraw()
+  end
+
+  local function handlePositionChange()
+    if internalUpdate then return end
+    moveTo(Controls.Horizontal.Value, Controls.Vertical.Value)
+  end
+
+  Controls.Horizontal.EventHandler = handlePositionChange
+  Controls.Vertical.EventHandler = handlePositionChange
+  Controls.PenUp.EventHandler = requestRedraw
+  Controls.LineWidth.EventHandler = requestRedraw
+
+  Controls.Clear.EventHandler = function()
+    segments = {}
+    currentX = 50
+    currentY = 50
+    internalUpdate = true
+    Controls.Horizontal.Value = 50
+    Controls.Vertical.Value = 50
+    internalUpdate = false
+    redraw()
+  end
+
+  Controls.Display.EventHandler = function()
+    Controls.Display.Boolean = false
+  end
+
+  internalUpdate = true
+  Controls.Horizontal.Value = 50
+  Controls.Vertical.Value = 50
+  Controls.LineWidth.Value = 3
+  internalUpdate = false
+  redraw()
+end
